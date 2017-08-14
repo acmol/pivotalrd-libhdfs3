@@ -1035,6 +1035,12 @@ static void ConstructHdfsFileInfo(hdfsFileInfo * infos,
     }
 }
 
+hdfsFileInfo * hdfsGlobStatus(hdfsFS fs, const char * path,
+                                 int * numEntries) {
+    //TODO
+    assert(false);
+    return NULL;
+}
 hdfsFileInfo * hdfsListDirectory(hdfsFS fs, const char * path,
                                  int * numEntries) {
     PARAMETER_ASSERT(fs && path && strlen(path) > 0 && numEntries, NULL, EINVAL);

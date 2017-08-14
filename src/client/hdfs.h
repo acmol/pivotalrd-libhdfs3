@@ -526,6 +526,8 @@ typedef struct {
  * @return Returns a dynamically-allocated array of hdfsFileInfo
  * objects; NULL on error.
  */
+
+hdfsFileInfo * hdfsGlobStatus(hdfsFS fs, const char * path, int * numEntries);
 hdfsFileInfo * hdfsListDirectory(hdfsFS fs, const char * path, int * numEntries);
 
 /**
