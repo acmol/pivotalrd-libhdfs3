@@ -68,6 +68,18 @@ typedef struct HdfsFileSystemInternalWrapper * hdfsFS;
 struct HdfsFileInternalWrapper;
 typedef struct HdfsFileInternalWrapper * hdfsFile;
 
+struct LineReader_internal {
+    hdfsFile hdfsF;
+    char* buffer;
+    int bufferSize;
+    int bufferPosn;
+    int bufferLength;
+    int eof;
+    int prevCharCR;
+    tOffset pos;
+};
+typedef struct LineReader_internal* LineReader;
+
 struct hdfsBuilder;
 
 /**
@@ -374,6 +386,32 @@ tSize hdfsRead(hdfsFS fs, hdfsFile file, void * buffer, tSize length);
  * @return Returns the number of bytes written, -1 on error.
  */
 tSize hdfsWrite(hdfsFS fs, hdfsFile file, const void * buffer, tSize length);
+
+/**
+ * createLineReader - create the LineReader on the top of hdfsFile
+ *
+ * @param f the raw file.
+ * @return Returns LineReader on success, NULL on error.
+ */
+LineReader createLineReader(hdfsFile f);
+
+/**
+ * readLineByLineReader - read line from the LineReader
+ *
+ * @param fs The configured filesystem handle.
+ * @param lr the LineReader
+ * @param line returned line address
+ * @return Returns line length. >=0 on success; -1 on eof; -2 on error.
+ */
+int readLineByLineReader(hdfsFS fs, LineReader lr, void** line);
+
+/**
+ * closeLineReader - close the LineReader
+ *
+ * @param lr the LineReader
+ */
+void closeLineReader(LineReader lr);
+
 
 /**
  * hdfsWrite - Flush the data.

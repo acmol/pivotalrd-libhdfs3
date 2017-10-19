@@ -668,7 +668,7 @@ hdfsFile hdfsOpenFile(hdfsFS fs, const char * path, int flags, int bufferSize,
 
             file->setInput(false);
             os = new OutputStream;
-            os->open(fs->getFilesystem(), path, internalFlags, 0777, false, replication,
+            os->open(fs->getFilesystem(), path, internalFlags, 0777, true, replication,
                      blocksize);
             file->setStream(os);
         } else {
@@ -814,6 +814,188 @@ tSize hdfsWrite(hdfsFS fs, hdfsFile file, const void * buffer, tSize length) {
     }
 
     return -1;
+}
+
+LineReader createLineReader(hdfsFile f){
+
+    if (!f || !f->isInput()) {
+        errno = EBADF;
+        return NULL;
+    }
+
+
+    LineReader lr = malloc(sizeof(struct LineReader_internal));
+    if (lr == NULL) {
+        errno = ENOMEM;
+        return NULL;
+    }
+
+    lr->hdfsF = f;
+
+    lr->buffer = (char*)malloc(64*1024 + 1);
+    if (lr->buffer == NULL){
+        errno = ENOMEM;
+        free(lr);
+        return NULL;
+    }
+
+    lr->bufferSize = 64*1024;
+    lr->bufferPosn = 0;
+    lr->bufferLength = 0;
+    lr->eof = 0;
+    lr->prevCharCR = 0;
+    lr->pos = 0;
+    return lr;
+}
+
+// >= 0 - has data
+// -1 - eof
+// -2 - error
+int readLineByLineReader(hdfsFS fs, LineReader lr, void** line){
+
+    static int MAX_LINE_SIZE = 100 * 1024 * 1024;
+
+    if ((fs == NULL) || (lr == NULL) || (line == NULL)){
+      errno = EINVAL;
+      return -2;
+    }
+
+    int lineStartPos = lr->bufferPosn;
+    int lineLength = 0;
+    int found = 0;
+    int bufferEndPos = 0;
+    int countNR = 0;
+
+    while (!found){
+
+        bufferEndPos = lr->bufferPosn + lr->bufferLength;
+        while (lr->bufferPosn < bufferEndPos) {
+            if (lr->buffer[lr->bufferPosn] == '\r'){
+                countNR++;
+                lr->prevCharCR = 1;
+                lr->bufferPosn++;
+                found = 1;
+                break;
+
+            } else if (lr->buffer[lr->bufferPosn] == '\n'){
+                countNR++;
+                // 如果前面为CR, 则吃掉这个LF，并且这一定是新行的开始
+                if (lr->prevCharCR){
+                    lineStartPos++;
+                    lr->prevCharCR = 0;
+                    lr->bufferPosn++;
+                    continue;
+                }
+
+                // 如果前面不是CR，则为行的尾部
+                lr->bufferPosn++;
+                found = 1;
+                break;
+
+            } else if (lr->prevCharCR) {
+                lr->prevCharCR = 0;
+            }
+
+            lr->bufferPosn++;
+            lineLength++;
+        }
+
+        if (!found){
+
+            // 如果这是文件的最后一行，就把这一行送出
+            if (lr->eof){
+                if (lineLength == 0){
+                    return -1;
+                } else {
+                    found = 1;
+                    continue;
+                }
+            }
+
+            // 如果当前buffer中没有数据
+            if (lineLength == 0) {
+                lineStartPos = 0;
+                lr->bufferPosn = 0;
+                tSize readSize = hdfsRead(fs, lr->hdfsF, lr->buffer, lr->bufferSize);
+                if (readSize == -1) {
+                    // 出现错误
+                    errno = EINTERNAL;
+                    return -2;
+                }
+                if (readSize != lr->bufferSize){
+                    // 文件读到尾部
+                    lr->eof = 1;
+                }
+                lr->bufferLength = readSize;
+
+            } else if (lineLength < lr->bufferSize) {
+                // 如果长度小于_bufferSize, 则在缓冲区中移动到头部
+                memmove(lr->buffer, lr->buffer + lineStartPos, lineLength);
+                lineStartPos = 0;
+                lr->bufferPosn = lineLength;
+                tSize readSize = hdfsRead(fs, lr->hdfsF, lr->buffer + lineLength, lr->bufferSize - lineLength);
+                if (readSize == -1) {
+                    // 出现错误
+                    errno = EINTERNAL;
+                    return -2;
+                }
+                if (readSize != lr->bufferSize - lineLength){
+                    // 文件读到尾部
+                    lr->eof = 1;
+                }
+                lr->bufferLength = readSize;
+            } else if (lineLength == lr->bufferSize) {
+                // 如果当前buffer中存有全部数据，则说明buffer空间不够，则扩大一倍buffer空间, 超过最大行大小限制，直接报错
+                if (lr->bufferSize >= MAX_LINE_SIZE){
+                     errno = EINTERNAL;
+                     return -2;
+                }
+                char* newBuffer = (char*)malloc(2*lr->bufferSize + 1);
+                if (newBuffer == NULL) {
+                  errno = ENOMEM;
+                  return -2;
+                }
+                memmove(newBuffer, lr->buffer, lr->bufferSize);
+                free(lr->buffer);
+                lr->buffer = newBuffer;
+                tSize readSize = hdfsRead(fs, lr->hdfsF, lr->buffer + lr->bufferSize, lr->bufferSize);
+                if (readSize == -1) {
+                    // 出现错误
+                    errno = EINTERNAL;
+                    return -2;
+                }
+                if (readSize != lr->bufferSize){
+                    // 文件读到尾部
+                    lr->eof = 1;
+                }
+                lr->bufferSize = lr->bufferSize*2;
+                lr->bufferLength = readSize;
+            } else {
+                // 不可能走到这里
+               errno = EINTERNAL;
+               return -2;
+            }
+        }
+    }
+
+    *line =  lr->buffer + lineStartPos;
+    *((char*)(*line) + lineLength) = '\0';
+    lr->bufferLength = bufferEndPos - lr->bufferPosn;
+    lr->pos = lr->pos + lineLength + countNR;
+    return lineLength;
+}
+
+void closeLineReader(LineReader lr){
+
+    if (lr == NULL) {
+      return;
+    }
+
+    free(lr->buffer);
+    lr->buffer = NULL;
+    lr->bufferSize = 0;
+
+    free(lr);
 }
 
 int hdfsFlush(hdfsFS fs, hdfsFile file) {
