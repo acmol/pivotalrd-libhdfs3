@@ -824,7 +824,7 @@ LineReader createLineReader(hdfsFile f){
     }
 
 
-    LineReader lr = malloc(sizeof(struct LineReader_internal));
+    LineReader lr = (LineReader) malloc(sizeof(struct LineReader_internal));
     if (lr == NULL) {
         errno = ENOMEM;
         return NULL;
